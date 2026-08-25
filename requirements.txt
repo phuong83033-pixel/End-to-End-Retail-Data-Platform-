@@ -1,0 +1,11 @@
+# Ingestion (Milestone 1)
+dlt[filesystem,parquet]==1.30.0
+pymssql==2.3.13
+minio==7.2.20
+python-dotenv==1.2.3
+s3fs==2026.7.0
+pyarrow==25.0.1
+
+# Warehouse / transformation (Milestone 2)
+duckdb>=1.1.0
+dbt-duckdb>=1.9.0

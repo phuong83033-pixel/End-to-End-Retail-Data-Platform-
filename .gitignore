@@ -1,0 +1,8 @@
+venv/ 
+.env 
+__pycache__/ 
+.vscode/ 
+implementation_plan.md 
+claude_code_plan.md 
+.claude/ 
+dbt/ 
