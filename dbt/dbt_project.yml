@@ -1,0 +1,27 @@
+name: 'xom_retails'
+version: '1.0.0'
+config-version: 2
+
+profile: 'xom_retails'
+
+model-paths: ["models"]
+test-paths: ["tests"]
+macro-paths: ["macros"]
+seed-paths: ["seeds"]
+snapshot-paths: ["snapshots"]
+
+clean-targets:
+  - "target"
+  - "dbt_packages"
+
+models:
+  xom_retails:
+    # SILVER: cleaned + standardised copies of the Bronze Parquet files.
+    # Materialised as tables (not views) so Silver is a real persisted layer.
+    staging:
+      +schema: silver
+      +materialized: table
+    # GOLD: star schema consumed by Metabase / ML / FastAPI.
+    marts:
+      +schema: gold
+      +materialized: table

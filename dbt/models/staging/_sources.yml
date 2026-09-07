@@ -1,0 +1,25 @@
+version: 2
+
+sources:
+  - name: bronze
+    description: >
+      Raw Parquet snapshots landed in MinIO by the dlt ingestion pipeline
+      (Ingestion/ingestion.py). One folder per source table, replaced in full on
+      every run. `external_location` makes DuckDB read the object store directly,
+      so nothing is copied into the warehouse before the Silver layer.
+    schema: main
+    meta:
+      external_location: "s3://{{ env_var('MINIO_BRONZE_BUCKET', 'bronze') }}/xom_retails/{name}/*.parquet"
+    tables:
+      - name: customers
+        description: One row per customer (15,266 rows at profiling time).
+      - name: products
+        description: One row per product, with current unit cost and price (2,517 rows).
+      - name: sales
+        description: >
+          One row per ORDER LINE - grain confirmed by profiling: 62,884 rows =
+          62,884 distinct (order_number, line_item) pairs across 26,326 orders.
+      - name: stores
+        description: >
+          One row per store (67 rows). store_key = 0 is the "Online" channel and
+          is the only store with a NULL square_meters.

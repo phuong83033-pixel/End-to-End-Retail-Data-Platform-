@@ -1,8 +1,16 @@
-venv/ 
-.env 
-__pycache__/ 
-.vscode/ 
-implementation_plan.md 
-claude_code_plan.md 
-.claude/ 
-dbt/ 
+venv/
+.env
+__pycache__/
+.vscode/
+implementation_plan.md
+claude_code_plan.md
+.claude/
+
+# dbt build artefacts - the project source itself is tracked
+dbt/target/
+dbt/dbt_packages/
+dbt/logs/
+dbt/.user.yml
+
+# Local DuckDB warehouse file - rebuilt by `dbt build`
+duckdb_warehouse/
