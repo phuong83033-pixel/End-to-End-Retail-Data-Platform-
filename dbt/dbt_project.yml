@@ -18,10 +18,10 @@ models:
   xom_retails:
     # SILVER: cleaned + standardised copies of the Bronze Parquet files.
     # Materialised as tables (not views) so Silver is a real persisted layer.
-    staging:
+    silver:
       +schema: silver
       +materialized: table
     # GOLD: star schema consumed by Metabase / ML / FastAPI.
-    marts:
+    gold:
       +schema: gold
       +materialized: table
