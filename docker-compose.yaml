@@ -25,7 +25,24 @@ services:
       - "4200:4200"
     environment:
       - PREFECT_UI_URL=http://localhost:4200/api
+    volumes:
+      # Prefect keeps its SQLite database (all run history, deployments and logs)
+      # at ~/.prefect. Without this volume every `docker compose down` or image
+      # update wipes the history the orchestrator exists to give you.
+      - prefect_data:/root/.prefect
 
-  
+  # Serves the dbt documentation site (lineage DAG, model + column docs, test
+  # coverage). Static files only - regenerate them with `dbt docs generate`,
+  # then refresh the browser; the container needs no restart.
+  dbt-docs:
+    image: nginx:alpine
+    container_name: dbt-docs
+    restart: always
+    ports:
+      - "8081:80"
+    volumes:
+      - ./dbt/target:/usr/share/nginx/html:ro
+
 volumes:
   minio_data:
+  prefect_data:

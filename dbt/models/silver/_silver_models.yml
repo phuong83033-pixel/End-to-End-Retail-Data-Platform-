@@ -1,0 +1,99 @@
+version: 2
+
+models:
+  - name: stg_customers
+    description: "SILVER - one row per customer."
+    columns:
+      - name: customer_key
+        description: Natural key of the customer.
+        data_tests: [unique, not_null]
+      - name: customer_name
+        description: Source column `name`, renamed for clarity.
+        data_tests: [not_null]
+      - name: gender
+        data_tests:
+          - accepted_values:
+              values: ['Male', 'Female']
+      - name: birthday
+        data_tests: [not_null]
+
+  - name: stg_products
+    description: "SILVER - one row per product, carrying its CURRENT unit cost and price."
+    columns:
+      - name: product_key
+        data_tests: [unique, not_null]
+      - name: product_name
+        data_tests: [not_null]
+      - name: unit_price
+        description: Current selling price in USD.
+        data_tests:
+          - not_null
+          - dbt_utils.accepted_range:
+              min_value: 0
+              inclusive: false
+      - name: unit_cost
+        description: Current cost in USD.
+        data_tests:
+          - not_null
+          - dbt_utils.accepted_range:
+              min_value: 0
+              inclusive: false
+      - name: category
+        data_tests: [not_null]
+
+  - name: stg_stores
+    description: "SILVER - one row per store. store_key = 0 is the online channel."
+    columns:
+      - name: store_key
+        data_tests: [unique, not_null]
+      - name: open_date
+        data_tests: [not_null]
+      - name: square_meters
+        description: NULL for the online store only - deliberately not tested for NULL.
+
+  - name: stg_sales
+    description: >
+      SILVER - one row per order line. Composite natural key
+      (order_number, line_item).
+    data_tests:
+      - dbt_utils.unique_combination_of_columns:
+          combination_of_columns: [order_number, line_item]
+      - dbt_utils.expression_is_true:
+          expression: "delivery_date >= order_date"
+          config:
+            where: "delivery_date is not null"
+    columns:
+      - name: order_number
+        description: Order identifier; repeats across the lines of one order.
+        data_tests: [not_null]
+      - name: line_item
+        data_tests: [not_null]
+      - name: order_date
+        data_tests: [not_null]
+      - name: delivery_date
+        description: Populated only for online orders (store_key = 0); NULL otherwise.
+      - name: customer_key
+        data_tests:
+          - not_null
+          - relationships:
+              to: ref('stg_customers')
+              field: customer_key
+      - name: product_key
+        data_tests:
+          - not_null
+          - relationships:
+              to: ref('stg_products')
+              field: product_key
+      - name: store_key
+        data_tests:
+          - not_null
+          - relationships:
+              to: ref('stg_stores')
+              field: store_key
+      - name: quantity
+        data_tests:
+          - not_null
+          - dbt_utils.accepted_range:
+              min_value: 1
+              max_value: 10
+              inclusive: true

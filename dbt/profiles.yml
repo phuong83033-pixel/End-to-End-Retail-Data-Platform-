@@ -1,0 +1,26 @@
+# Kept inside the project so the whole warehouse is reproducible from a clone.
+# Run dbt from this folder with: dbt build --profiles-dir .
+#
+# dbt does NOT read the project's .env file, so every env_var() below carries a
+# default matching docker-compose.yaml / .env.example. Exported environment
+# variables still win.
+xom_retails:
+  target: dev
+  outputs:
+    dev:
+      type: duckdb
+      # Local DuckDB file holding the SILVER + GOLD layers.
+      path: "{{ env_var('DUCKDB_PATH', 'C:/CS/Project/retail_sales/duckdb_warehouse/warehouse.duckdb') }}"
+      # Custom schemas are appended to this, giving xom_retails_silver / xom_retails_gold.
+      schema: xom_retails
+      threads: 4
+      # httpfs lets DuckDB read the Bronze Parquet files straight out of MinIO.
+      extensions:
+        - httpfs
+      settings:
+        s3_endpoint: "{{ env_var('MINIO_ENDPOINT', 'localhost:9000') }}"
+        s3_access_key_id: "{{ env_var('MINIO_ACCESS_KEY', 'minioadmin') }}"
+        s3_secret_access_key: "{{ env_var('MINIO_SECRET_KEY', 'minioadminpassword') }}"
+        s3_use_ssl: false
+        # MinIO serves buckets as paths, not as virtual hosts - required setting.
+        s3_url_style: path
