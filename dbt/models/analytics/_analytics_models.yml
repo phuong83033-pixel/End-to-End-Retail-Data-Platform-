@@ -1,0 +1,214 @@
+version: 2
+
+models:
+  - name: rpt_product_performance
+    description: >
+      ANALYTICS - one row per product (all 2,517, including never-sold ones).
+      Units, orders, revenue, cost, profit and margin %. Use `has_sold` to
+      separate the catalogue from what actually sells.
+    columns:
+      - name: product_key
+        description: Primary key. One row per product in dim_product.
+        data_tests: [unique, not_null]
+      - name: product_name
+        description: Product display name.
+        data_tests: [not_null]
+      - name: revenue
+        description: Sum of gross_sales at current prices.
+        data_tests:
+          - not_null
+          - dbt_utils.accepted_range:
+              arguments:
+                min_value: 0
+                inclusive: true
+      - name: profit
+        description: Sum of gross_margin. Never negative - no product is priced below cost.
+        data_tests: [not_null]
+      - name: margin_pct
+        description: profit / revenue as a percentage. NULL when the product never sold.
+      - name: has_sold
+        description: False for products with no sales at all.
+        data_tests: [not_null]
+
+  - name: rpt_category_performance
+    description: >
+      ANALYTICS - one row per (category, subcategory). Rolls up to the 8
+      categories with a GROUP BY. Covers only subcategories that have sales.
+    data_tests:
+      - dbt_utils.unique_combination_of_columns:
+          arguments:
+            combination_of_columns: [category_key, subcategory_key]
+    columns:
+      - name: category
+        description: One of the 8 top-level product categories.
+        data_tests: [not_null]
+      - name: subcategory
+        description: One of the 32 subcategories; child of category.
+        data_tests: [not_null]
+      - name: revenue
+        description: Total gross_sales for this subcategory, USD.
+        data_tests: [not_null]
+      - name: revenue_share_pct
+        description: This subcategory's share of total revenue. Sums to ~100 across all rows.
+        data_tests: [not_null]
+
+  - name: rpt_store_performance
+    description: >
+      ANALYTICS - one row per store (all 67). Includes the online channel
+      (store_key = 0), whose revenue_per_sqm is NULL by design.
+    columns:
+      - name: store_key
+        description: Primary key. 0 = online channel.
+        data_tests: [unique, not_null]
+      - name: revenue
+        description: Total gross_sales for this store, USD.
+        data_tests: [not_null]
+      - name: is_online
+        description: True only for store_key = 0.
+        data_tests: [not_null]
+      - name: revenue_per_sqm
+        description: >
+          Revenue divided by floor space. NULL for the online store, which has
+          none - filter on is_online = false when ranking physical stores.
+
+  - name: rpt_customer_performance
+    description: >
+      ANALYTICS - one row per customer (all 15,266). Only 11,887 have ever
+      purchased; use has_purchased to choose the denominator deliberately when
+      computing averages.
+    columns:
+      - name: customer_key
+        description: Primary key.
+        data_tests: [unique, not_null]
+      - name: revenue
+        description: Lifetime gross_sales for this customer, USD. 0 for non-purchasers.
+        data_tests: [not_null]
+      - name: has_purchased
+        description: False for the 3,379 customers with no orders.
+        data_tests: [not_null]
+      - name: is_repeat_customer
+        description: True when the customer placed more than one order.
+        data_tests: [not_null]
+      - name: avg_order_value
+        description: revenue / order_count. NULL for customers who never purchased.
+
+  - name: rpt_monthly_revenue
+    description: >
+      ANALYTICS - one row per month with sales (62 months, 2016-01 to 2021-02).
+      Check is_partial_period before drawing trend conclusions.
+    columns:
+      - name: month_start
+        description: First day of the month. Primary key.
+        data_tests: [unique, not_null]
+      - name: revenue
+        description: Total gross_sales in this month, USD.
+        data_tests: [not_null]
+      - name: order_count
+        description: Distinct orders in this month (COUNT DISTINCT order_id, not row count).
+        data_tests: [not_null]
+      - name: is_partial_period
+        description: >
+          True for months the source does not fully cover. Only 2021-02 (data
+          stops on the 20th), where revenue looks like a collapse but is a
+          truncated month.
+        data_tests: [not_null]
+
+  - name: rpt_product_affinity
+    description: >
+      ANALYTICS - product-pair co-occurrence, one row per directional pair, over
+      the 17,121 multi-item baskets. Pairs seen once are excluded.
+      WEAK SIGNAL - the strongest pair co-occurs in only 5 orders and 91% of
+      rows co-occur exactly twice, so individual product rules here are close to
+      noise. For "what is bought together", prefer rpt_subcategory_affinity.
+      This model is kept for drill-down and item-item similarity.
+    data_tests:
+      - dbt_utils.unique_combination_of_columns:
+          arguments:
+            combination_of_columns: [antecedent_product_key, consequent_product_key]
+    columns:
+      - name: antecedent_product_key
+        description: The "if a customer bought this" side of the rule.
+        data_tests: [not_null]
+      - name: consequent_product_key
+        description: The "they also bought this" side of the rule.
+        data_tests: [not_null]
+      - name: pair_order_count
+        description: Orders containing both products. Always >= 2.
+        data_tests:
+          - not_null
+          - dbt_utils.accepted_range:
+              arguments:
+                min_value: 2
+                inclusive: true
+      - name: support
+        description: Share of multi-item baskets containing both products.
+        data_tests:
+          - not_null
+          - dbt_utils.accepted_range:
+              arguments:
+                min_value: 0
+                max_value: 1
+                inclusive: true
+      - name: confidence
+        description: P(consequent | antecedent). Between 0 and 1.
+        data_tests:
+          - not_null
+          - dbt_utils.accepted_range:
+              arguments:
+                min_value: 0
+                max_value: 1
+                inclusive: true
+      - name: lift
+        description: >
+          confidence / P(consequent). Above 1 means the antecedent genuinely
+          raises the odds; around 1 means the pairing is no better than chance.
+        data_tests: [not_null]
+
+  - name: rpt_subcategory_affinity
+    description: >
+      ANALYTICS - "what sells together" at subcategory level, one row per
+      directional pair. THIS is the model to answer basket questions: rolling
+      the same baskets up to 32 subcategories concentrates the signal, with the
+      top pair co-occurring 1,548 times versus a maximum of 5 at product level.
+    data_tests:
+      - dbt_utils.unique_combination_of_columns:
+          arguments:
+            combination_of_columns: [antecedent_subcategory_key, consequent_subcategory_key]
+    columns:
+      - name: antecedent_subcategory_key
+        description: The "if a customer bought from this subcategory" side.
+        data_tests: [not_null]
+      - name: consequent_subcategory_key
+        description: The "they also bought from this subcategory" side.
+        data_tests: [not_null]
+      - name: pair_order_count
+        description: Multi-item orders containing both subcategories.
+        data_tests:
+          - not_null
+          - dbt_utils.accepted_range:
+              arguments:
+                min_value: 1
+                inclusive: true
+      - name: support
+        description: Share of multi-item baskets containing both subcategories.
+        data_tests:
+          - not_null
+          - dbt_utils.accepted_range:
+              arguments:
+                min_value: 0
+                max_value: 1
+                inclusive: true
+      - name: confidence
+        description: P(consequent | antecedent).
+        data_tests:
+          - not_null
+          - dbt_utils.accepted_range:
+              arguments:
+                min_value: 0
+                max_value: 1
+                inclusive: true
+      - name: lift
+        description: >
+          confidence / P(consequent). Above 1 means a genuine association;
+          around 1 means the pairing merely reflects overall popularity.
+        data_tests: [not_null]

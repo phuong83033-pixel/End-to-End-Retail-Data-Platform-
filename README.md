@@ -40,7 +40,8 @@ ML skeleton that runs entirely on a laptop and can be re-run from scratch.
 | Object storage | MinIO (S3-compatible), Parquet |
 | Transformation | dbt Core 1.12 + dbt-duckdb, dbt_utils |
 | Warehouse | DuckDB (local file) |
-| Orchestration | Prefect (container present, not wired up yet) |
+| Orchestration | Prefect 3 (flow at `orchestration/prefect/flows/`) |
+| Pipeline docs | dbt docs served by nginx |
 | Local infra | Docker Compose |
 
 ---
@@ -112,16 +113,74 @@ Expect `62884` rows across `26326` distinct orders — matching the source exact
 
 ---
 
+## Running the pipeline with Prefect
+
+Steps 3–5 above are the manual path. The Prefect flow runs the same three stages with
+run history, timings and retries — and lets you re-run **one** stage instead of all of
+them.
+
+```bash
+./venv/Scripts/python.exe orchestration/prefect/flows/retail_pipeline.py
+```
+
+| Flag | Effect |
+|---|---|
+| *(none)* | ingest → `dbt build` → `dbt docs generate` |
+| `--no-ingest` | Rebuild the warehouse from the Bronze data already in MinIO |
+| `--no-transform` | Ingest only |
+| `--tables sales` | Ingest a subset of source tables |
+| `--select marts` | Restrict the dbt build to selected nodes |
+| `--serve` | Register a deployment and wait for runs triggered from the Prefect UI |
+
+Every run appears at **http://localhost:4200** with per-task logs and durations. The
+ingestion task retries twice — it's the only stage crossing an external network — and
+because the load is a full snapshot, a retry can't duplicate rows.
+
+To trigger runs from the UI (with parameters, or on a schedule), leave the deployment
+serving in its own terminal:
+
+```bash
+./venv/Scripts/python.exe orchestration/prefect/flows/retail_pipeline.py --serve
+```
+
+---
+
+## Pipeline UIs
+
+| URL | What it shows |
+|---|---|
+| **http://localhost:8081** | **dbt docs** — lineage DAG from Bronze sources through Silver to Gold, model and column descriptions, test coverage, compiled SQL |
+| **http://localhost:4200** | **Prefect** — flow run history: which stages ran, how long they took, what failed |
+| http://localhost:9002 | MinIO console — the Bronze Parquet files |
+
+The two pipeline views answer different questions: dbt docs shows what the pipeline *is*
+(structure and lineage), Prefect shows what it *did* (execution). dbt docs covers only
+the dbt half — the SQL Server → MinIO ingestion isn't a dbt model, which is exactly the
+gap Prefect fills.
+
+nginx serves `dbt/target/` directly, so refreshing the docs is just:
+
+```bash
+cd dbt; ../venv/Scripts/dbt.exe docs generate --profiles-dir .
+```
+
+No container restart needed — reload the page. The Prefect flow does this automatically
+as its last stage.
+
+---
+
 ## Project structure
 
 ```text
 retail_sales/
 ├── config.py                  # Single source of credentials/settings (reads .env)
-├── docker-compose.yaml        # MinIO + Prefect
+├── docker-compose.yaml        # MinIO + Prefect + dbt-docs
 ├── requirements.txt
 ├── .env.example
 ├── Ingestion/
 │   └── ingestion.py           # dlt pipeline: SQL Server → Bronze Parquet
+├── orchestration/prefect/flows/
+│   └── retail_pipeline.py     # Prefect flow: ingest → dbt build → dbt docs
 ├── dbt/
 │   ├── dbt_project.yml        # staging → silver schema, marts → gold schema
 │   ├── profiles.yml           # duckdb + httpfs → MinIO

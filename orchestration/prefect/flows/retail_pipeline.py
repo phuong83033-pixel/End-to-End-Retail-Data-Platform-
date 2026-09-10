@@ -107,6 +107,41 @@ def dbt_build(select: str | None = None) -> str:
     return output
 
 
+@task(name="publish-serving-snapshot")
+def publish_serving_snapshot() -> str:
+    """Copy the freshly built warehouse to the file the query engine reads.
+
+    DuckDB allows a single writer, so a text-to-SQL session holding the warehouse
+    open would block the next `dbt build`, and a build in progress would lock the
+    query engine out. Serving a snapshot removes the contention entirely, and it
+    only ever contains data that passed the full test suite - this task runs after
+    dbt build, so a failed build leaves the previous snapshot in place.
+    """
+    import shutil
+
+    logger = get_run_logger()
+    source = Path(
+        os.getenv("DUCKDB_PATH", str(PROJECT_ROOT / "duckdb_warehouse" / "warehouse.duckdb"))
+    )
+    target = source.with_name("warehouse_serving.duckdb")
+
+    if not source.exists():
+        raise FileNotFoundError(f"No warehouse at {source} to publish.")
+
+    shutil.copy2(source, target)
+
+    # DuckDB may leave a write-ahead log beside the database; copying the file
+    # without it would publish a snapshot missing the most recent commits.
+    wal = source.with_suffix(source.suffix + ".wal")
+    if wal.exists():
+        shutil.copy2(wal, target.with_suffix(target.suffix + ".wal"))
+        logger.info("Copied the write-ahead log alongside the snapshot")
+
+    size_mb = target.stat().st_size / 1_048_576
+    logger.info("Published serving snapshot -> %s (%.1f MB)", target, size_mb)
+    return str(target)
+
+
 @task(name="dbt-docs-generate")
 def dbt_docs_generate() -> str:
     """Regenerate the dbt documentation site served at http://localhost:8081.
@@ -124,6 +159,7 @@ def dbt_docs_generate() -> str:
 def retail_pipeline(
     run_ingestion: bool = True,
     run_transform: bool = True,
+    run_publish: bool = True,
     run_docs: bool = True,
     tables: list[str] | None = None,
     dbt_select: str | None = None,
@@ -136,7 +172,8 @@ def retail_pipeline(
     """
     logger = get_run_logger()
     logger.info(
-        "stages -> ingestion=%s transform=%s docs=%s", run_ingestion, run_transform, run_docs
+        "stages -> ingestion=%s transform=%s publish=%s docs=%s",
+        run_ingestion, run_transform, run_publish, run_docs,
     )
 
     if run_ingestion:
@@ -149,6 +186,9 @@ def retail_pipeline(
     else:
         logger.info("Skipping dbt build")
 
+    if run_publish:
+        publish_serving_snapshot()
+
     if run_docs:
         dbt_docs_generate()
 
@@ -160,6 +200,11 @@ def parse_args() -> argparse.Namespace:
     parser = argparse.ArgumentParser(description="Run the retail sales pipeline via Prefect.")
     parser.add_argument("--no-ingest", action="store_true", help="Skip the Bronze ingestion stage.")
     parser.add_argument("--no-transform", action="store_true", help="Skip the dbt build stage.")
+    parser.add_argument(
+        "--no-publish",
+        action="store_true",
+        help="Skip publishing the serving snapshot read by the text-to-SQL engine.",
+    )
     parser.add_argument("--no-docs", action="store_true", help="Skip regenerating the dbt docs.")
     parser.add_argument("--tables", nargs="+", help="Subset of source tables to ingest.")
     parser.add_argument("--select", dest="dbt_select", help="dbt node selection for the build.")
@@ -182,6 +227,7 @@ if __name__ == "__main__":
         retail_pipeline(
             run_ingestion=not args.no_ingest,
             run_transform=not args.no_transform,
+            run_publish=not args.no_publish,
             run_docs=not args.no_docs,
             tables=args.tables,
             dbt_select=args.dbt_select,

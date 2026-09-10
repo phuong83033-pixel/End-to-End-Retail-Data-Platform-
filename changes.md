@@ -165,7 +165,165 @@ revenue by year
 
 ---
 
-## 5. Not done / follow-ups
+## 5. Pipeline UIs + orchestration
+
+### dbt docs — http://localhost:8081
+
+New `dbt-docs` service in docker-compose: `nginx:alpine` serving `./dbt/target` read-only
+on port 8081. Shows the lineage DAG (Bronze sources → 4 Silver models → 5 Gold models),
+model and column descriptions, test coverage and compiled SQL.
+
+Static files only, so `dbt docs generate` refreshes the site with no container restart.
+
+### Prefect flow — http://localhost:4200
+
+`orchestration/prefect/flows/retail_pipeline.py` wraps the whole pipeline in three tasks:
+
+```
+ingest-bronze  →  dbt-build  →  dbt-docs-generate
+```
+
+Each stage has its own switch, so you never repeat work that already succeeded:
+
+| Flag | Effect |
+|---|---|
+| *(none)* | full pipeline |
+| `--no-ingest` | rebuild the warehouse from Bronze already in MinIO |
+| `--no-transform` | ingest only |
+| `--tables sales` | ingest a subset |
+| `--select marts` | restrict the dbt build |
+| `--serve` | register a deployment for UI-triggered runs |
+
+`ingest-bronze` retries twice (the only stage crossing an external network); the load is
+a full snapshot, so a retry cannot duplicate rows. dbt runs as a subprocess rather than
+an import, keeping its dependency tree isolated from Prefect's.
+
+### Fixed: Prefect had no persistent storage
+
+The `prefect-server` service had **no volume** — its SQLite database (all run history,
+deployments and logs) lived inside the container, so any `docker compose down` or image
+update would wipe the history the orchestrator exists to provide. Added a
+`prefect_data` volume at `/root/.prefect`. Caught while only 1 test run existed, so
+nothing was lost.
+
+### Verified
+
+- Full flow end to end: ingest 7s → `dbt build` 73 PASS → docs regenerated
+- `--no-ingest` fast path: transform only, 73 PASS
+- Deployment registered and **READY**; a run triggered through the API with
+  `{run_ingestion: false, run_transform: true}` completed successfully — this is the
+  same path the UI's "Run" button uses
+- Both UIs return HTTP 200
+
+---
+
+## 6. Milestone 0 completed + cleanup
+
+- **`docs/data_dictionary.md`** — every column across Source, Bronze, Silver and Gold with
+  observed types, nullability, ranges and cardinality.
+- **`docs/data_model.md`** — Mermaid ERD, the grain statement, each design decision with
+  the profiling result behind it, and answers to all 10 open questions from
+  `implementation_plan.md` §18.
+- **dbt deprecations fixed** — all 19 `MissingArgumentsPropertyInGenericTestDeprecation`
+  warnings resolved by nesting generic-test arguments under `arguments:` in both YAML
+  files. dbt 1.12 warns today; dbt Fusion will reject the old form. Build re-verified:
+  9 models, 64 tests, 73 PASS, zero warnings.
+- **`.env.example` restored** — the README quick start tells you to copy it, and it was
+  missing.
+- **dbt model folders renamed** `staging/` → `silver/`, `marts/` → `gold/` (flattened),
+  so the layout names the medallion layers. Schema names unchanged.
+
+---
+
+## 7. ML plan — how data reaches the models
+
+*Planning only. No ML code written yet.*
+
+### 7.1 The connection: dbt feature marts, not ad-hoc SQL in notebooks
+
+The instinct is to have each training script open DuckDB and run its own SQL. That gets
+messy fast: the same "what counts as a basket" logic ends up copied across notebooks and
+drifts. Instead, **every ML input becomes a dbt model in a `models/ml/` folder**, so
+feature engineering is versioned, tested, and visible in the same lineage graph as the
+rest of the warehouse:
+
+```text
+xom_retails_gold.fact_sales + dims
+        │  dbt (models/ml/, schema xom_retails_ml)
+        ▼
+ml_basket_transactions       one row per (order_id, product_key), deduped
+ml_customer_product_matrix   one row per (customer_key, product_key) with counts
+ml_category_monthly_demand   one row per (category, month) with units + revenue
+        │  Python reads a finished table - no business logic in the notebook
+        ▼
+mlxtend / scikit-learn / PyTorch
+        │
+        ▼
+results written back to DuckDB (ml_basket_rules, ...) and/or ml/artifacts/
+```
+
+Python's data layer stays thin — a single `ml/common/data.py` with one loader per mart,
+each doing `select * from xom_retails_ml.<table>` into a DataFrame.
+
+### 7.2 The DuckDB locking constraint (this drives the design)
+
+DuckDB allows **one writer**. A notebook holding the warehouse open blocks `dbt build`,
+and vice versa. Two rules follow, and they are not optional:
+
+1. **All ML reads use `duckdb.connect(path, read_only=True)`.** Multiple readers coexist
+   fine; a reader only conflicts with an active writer.
+2. **Training is sequenced after the build by Prefect, never run concurrently.** The
+   existing flow already gives this for free — an `ml-train` task added after `dbt-build`
+   cannot overlap with it.
+
+This is the same constraint that made Metabase awkward. Sequencing through the
+orchestrator sidesteps it entirely, which is a good argument for the flow we already have.
+
+### 7.3 What the data will actually support
+
+Profiled against the Gold layer before committing to any model. Two of the three
+milestone-4 models need their scope changed:
+
+| | Finding | Consequence |
+|---|---|---|
+| **Market Basket** | 26,326 orders, but **9,205 (35%) are single-item** — useless for association rules. 17,121 usable baskets. Median product appears in just **15 orders** → support ≈ 0.0009 | **Product-level rules are marginal.** Run FP-Growth at **category (8) and subcategory (32) level** as the primary analysis, and product-level only on the **338 products with ≥50 orders** |
+| **Recommendation** | 11,887 customers have purchases (3,379 never bought). **7,272 have >1 order**; interaction density **0.21%** | Feasible. Train on repeat buyers; 4,615 single-order customers are cold-start and belong to the popularity baseline |
+| **Forecasting** | Products average **25 line items across 5 years** (median 15). **75% of product-months have zero sales** (39,212 of 156,054) | **Per-product forecasting is not viable.** Aggregate to category-month (8 × 62 = 496 points) or total-monthly (62 points). Enough for naive/seasonal baselines; **not** enough for LSTM — the plan's "only if justified" clause applies, and it isn't |
+
+### 7.4 Proposed model sequence
+
+**Model 1 — Market Basket (FP-Growth, mlxtend).** First because it's simple, needs no
+train/test split, and validates the transaction grain end to end. Input
+`ml_basket_transactions` filtered to multi-item baskets; must dedupe the 75
+`(order_id, product_key)` pairs that span multiple lines. Output: antecedent, consequent,
+support, confidence, lift — written back to DuckDB so rules can join to `dim_product`.
+
+**Model 2 — Recommendation.** Popularity baseline → item-item cosine similarity →
+matrix factorisation (implicit ALS). Evaluated with a **temporal** split (train on orders
+before a cutoff date, test after) rather than a random one — a random split leaks future
+purchases. Metrics: Precision@K, Recall@K, MAP@K.
+
+**Model 3 — Demand forecasting.** Only at category-month grain, and only after 1 and 2.
+Naive and seasonal-naive baselines first; a simple ML model only if it beats them on
+MAE/MAPE. No deep learning — 62 monthly observations cannot support it.
+
+### 7.5 Proposed layout
+
+```text
+dbt/models/ml/          ml_basket_transactions.sql, ml_customer_product_matrix.sql,
+                        ml_category_monthly_demand.sql  (+ tests)
+ml/common/data.py       read-only DuckDB loaders, one per mart
+ml/basket/              mining.py, rules.py
+ml/recommendation/      data.py, model.py, train.py, evaluate.py
+ml/artifacts/           serialised models (git-ignored)
+```
+
+Prefect gains an optional `ml-train` task after `dbt-build`, off by default so the daily
+pipeline stays fast.
+
+---
+
+## 8. Not done / follow-ups
 
 - `docs/data_dictionary.md` and `docs/data_model.md` (Milestone 0 write-up) outstanding
 - `dbt build` emits 19 `MissingArgumentsPropertyInGenericTestDeprecation` warnings —
@@ -174,5 +332,8 @@ revenue by year
   from the pre-rename script. Harmless — dbt reads the plural names — but worth deleting.
 - `.env.example` was created during the session but is no longer on disk; the README
   quick start references it.
-- Prefect is running in docker-compose but nothing is wired to it (deferred by choice).
+- The Prefect deployment only accepts UI-triggered runs while `--serve` is running in a
+  terminal. Making that survive reboots means a worker service in docker-compose.
+- No schedule is set on the deployment yet — `retail_pipeline.serve(cron=...)` would add
+  one (e.g. nightly).
 - Milestones 3–5 (Metabase, ML, FastAPI/Streamlit) not started.

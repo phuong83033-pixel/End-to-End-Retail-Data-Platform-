@@ -25,3 +25,8 @@ models:
     gold:
       +schema: gold
       +materialized: table
+    # ANALYTICS: pre-aggregated reporting marts. These are the tables the
+    # text-to-SQL engine prefers - one lookup instead of join reasoning.
+    analytics:
+      +schema: analytics
+      +materialized: table

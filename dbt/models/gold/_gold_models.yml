@@ -18,8 +18,9 @@ models:
         description: unit_price - unit_cost at current prices.
         data_tests:
           - dbt_utils.accepted_range:
-              min_value: 0
-              inclusive: true
+              arguments:
+                min_value: 0
+                inclusive: true
 
   - name: dim_store
     description: "GOLD - one row per store."
@@ -28,6 +29,7 @@ models:
         description: Primary key. 0 = online channel.
         data_tests: [unique, not_null]
       - name: is_online
+        description: True only for store_key = 0. Filter it out when ranking physical stores.
         data_tests: [not_null]
 
   - name: dim_date
@@ -37,6 +39,9 @@ models:
         description: Primary key, yyyymmdd as an integer.
         data_tests: [unique, not_null]
       - name: full_date
+        description: >
+          The actual DATE. Join fact_sales.date_key to dim_date.date_key, then
+          filter or group on this column for any time-based question.
         data_tests: [unique, not_null]
 
   - name: fact_sales
@@ -45,9 +50,11 @@ models:
       price/cost (the source has no transaction-time price); all amounts USD.
     data_tests:
       - dbt_utils.expression_is_true:
-          expression: "gross_margin = gross_sales - gross_cost"
+          arguments:
+            expression: "gross_margin = gross_sales - gross_cost"
       - dbt_utils.unique_combination_of_columns:
-          combination_of_columns: [order_id, line_item]
+          arguments:
+            combination_of_columns: [order_id, line_item]
     columns:
       - name: sales_key
         description: Surrogate key, md5(order_id, line_item).
@@ -60,53 +67,75 @@ models:
         data_tests:
           - not_null
           - relationships:
-              to: ref('dim_date')
-              field: date_key
+              arguments:
+                to: ref('dim_date')
+                field: date_key
       - name: delivery_date_key
         description: >
           Delivery date FK, NULL for in-store orders. The conditional rule is
           asserted by tests/assert_delivery_only_for_online_orders.sql.
         data_tests:
           - relationships:
-              to: ref('dim_date')
-              field: date_key
+              arguments:
+                to: ref('dim_date')
+                field: date_key
       - name: customer_key
+        description: >
+          FK to dim_customer. Note only 11,887 of the 15,266 customers in the
+          dimension ever appear here.
         data_tests:
           - not_null
           - relationships:
-              to: ref('dim_customer')
-              field: customer_key
+              arguments:
+                to: ref('dim_customer')
+                field: customer_key
       - name: product_key
+        description: FK to dim_product. 2,492 of the 2,517 catalogue products appear here.
         data_tests:
           - not_null
           - relationships:
-              to: ref('dim_product')
-              field: product_key
+              arguments:
+                to: ref('dim_product')
+                field: product_key
       - name: store_key
+        description: FK to dim_store. 0 = the online channel.
         data_tests:
           - not_null
           - relationships:
-              to: ref('dim_store')
-              field: store_key
+              arguments:
+                to: ref('dim_store')
+                field: store_key
       - name: quantity
+        description: Units of this product on this order line. Always between 1 and 10.
         data_tests:
           - not_null
           - dbt_utils.accepted_range:
-              min_value: 1
-              max_value: 10
-              inclusive: true
+              arguments:
+                min_value: 1
+                max_value: 10
+                inclusive: true
       - name: unit_price
-        description: Not null proves the product join found a match for every line.
+        description: >
+          Selling price per unit in USD, from the product's CURRENT price - the
+          source records no transaction-time price. Not null also proves the
+          product join matched every line.
         data_tests: [not_null]
       - name: unit_cost
+        description: Cost per unit in USD, from the product's current cost.
         data_tests: [not_null]
       - name: gross_sales
+        description: Revenue for this line = quantity * unit_price, USD.
         data_tests:
           - not_null
           - dbt_utils.accepted_range:
-              min_value: 0
-              inclusive: false
+              arguments:
+                min_value: 0
+                inclusive: false
       - name: gross_cost
+        description: Cost of goods for this line = quantity * unit_cost, USD.
         data_tests: [not_null]
       - name: gross_margin
+        description: >
+          Profit for this line = gross_sales - gross_cost, USD. This is the
+          column to use for any "profit" question.
         data_tests: [not_null]

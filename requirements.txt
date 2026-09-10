@@ -12,3 +12,14 @@ dbt-duckdb>=1.9.0
 
 # Orchestration - runs ingestion + dbt as one observable flow
 prefect>=3.8,<4
+
+# Text-to-SQL engine. Gemini is the only hosted backend: its free tier means a
+# fresh clone can run the engine without paying for API access. Without a key the
+# offline rule engine still works, so google-genai is optional in practice.
+google-genai>=1.0.0
+sqlglot>=25.0.0
+rich>=13.0.0
+
+# Serving layer - HTTP access to the text-to-SQL engine
+fastapi>=0.110
+uvicorn[standard]>=0.29

@@ -1,0 +1,161 @@
+# Evaluation suite for the text-to-SQL engine.
+#
+# Each case pairs a natural-language question with a REFERENCE query that is
+# known correct. At eval time both the generated SQL and the reference are
+# executed and their *results* compared - never their text, because many
+# different queries answer the same question correctly.
+#
+# check modes:
+#   scalar     first cell of the first row must match (numeric tolerance applied)
+#   row_count  number of rows returned must match
+#   set        the named column's values must match as a set, order-independent
+#
+# `offline: true` marks cases the rule-based generator is expected to handle, so
+# a run without an API key still produces a meaningful pass rate.
+
+- id: total_revenue
+  question: What is the total revenue?
+  check: scalar
+  offline: true
+  reference_sql: SELECT SUM(gross_sales) FROM xom_retails_gold.fact_sales
+
+- id: total_profit
+  question: What is our total profit?
+  check: scalar
+  offline: true
+  reference_sql: SELECT SUM(gross_margin) FROM xom_retails_gold.fact_sales
+
+- id: order_count_total
+  question: How many orders have we had in total?
+  check: scalar
+  offline: true
+  reference_sql: SELECT COUNT(DISTINCT order_id) FROM xom_retails_gold.fact_sales
+
+# The grain trap: COUNT(*) here returns 62,884 instead of 26,326.
+- id: order_count_grain_trap
+  question: How many distinct orders were placed, not order lines?
+  check: scalar
+  reference_sql: SELECT COUNT(DISTINCT order_id) FROM xom_retails_gold.fact_sales
+
+- id: orders_in_2019
+  question: How many orders were placed in 2019?
+  check: scalar
+  reference_sql: >
+    SELECT COUNT(DISTINCT f.order_id) FROM xom_retails_gold.fact_sales f
+    JOIN xom_retails_gold.dim_date d ON f.date_key = d.date_key WHERE d.year = 2019
+
+- id: top_product_by_profit
+  question: Which single product makes the most profit?
+  check: set
+  column: product_name
+  reference_sql: >
+    SELECT product_name FROM xom_retails_analytics.rpt_product_performance
+    ORDER BY profit DESC LIMIT 1
+
+- id: top_5_products_revenue
+  question: List the top 5 products by revenue.
+  check: set
+  column: product_name
+  offline: true
+  reference_sql: >
+    SELECT product_name FROM xom_retails_analytics.rpt_product_performance
+    ORDER BY revenue DESC LIMIT 5
+
+- id: category_count
+  question: How many product categories are there?
+  check: scalar
+  reference_sql: SELECT COUNT(DISTINCT category) FROM xom_retails_gold.dim_product
+
+- id: best_category_revenue
+  question: Which product category earns the most revenue?
+  check: set
+  column: category
+  reference_sql: >
+    SELECT category FROM xom_retails_analytics.rpt_category_performance
+    GROUP BY category ORDER BY SUM(revenue) DESC LIMIT 1
+
+- id: store_count
+  question: How many stores do we have?
+  check: scalar
+  reference_sql: SELECT COUNT(*) FROM xom_retails_gold.dim_store
+
+# The online store has NULL square_meters and must be excluded.
+- id: best_store_per_sqm
+  question: Which physical store earns the most revenue per square meter?
+  check: set
+  column: store_key
+  offline: true
+  reference_sql: >
+    SELECT store_key FROM xom_retails_analytics.rpt_store_performance
+    WHERE NOT is_online ORDER BY revenue_per_sqm DESC LIMIT 1
+
+- id: online_revenue_share
+  question: How much revenue came from the online store?
+  check: scalar
+  reference_sql: >
+    SELECT SUM(revenue) FROM xom_retails_analytics.rpt_store_performance WHERE is_online
+
+- id: months_covered
+  question: How many months of sales data do we have?
+  check: scalar
+  reference_sql: SELECT COUNT(*) FROM xom_retails_analytics.rpt_monthly_revenue
+
+- id: revenue_2020
+  question: What was total revenue in 2020?
+  check: scalar
+  reference_sql: >
+    SELECT SUM(revenue) FROM xom_retails_analytics.rpt_monthly_revenue WHERE year = 2020
+
+- id: monthly_series_2020
+  question: Show me revenue for each month of 2020.
+  check: row_count
+  reference_sql: >
+    SELECT month_start FROM xom_retails_analytics.rpt_monthly_revenue WHERE year = 2020
+
+- id: subcategory_affinity_top
+  question: Which two product subcategories are bought together most often?
+  check: row_count
+  offline: true
+  reference_sql: >
+    SELECT antecedent_subcategory, consequent_subcategory
+    FROM xom_retails_analytics.rpt_subcategory_affinity
+    ORDER BY pair_order_count DESC LIMIT 10
+
+# Denominator trap: 15,266 customers exist but only 11,887 ever purchased.
+- id: purchasing_customers
+  question: How many customers have actually made a purchase?
+  check: scalar
+  reference_sql: >
+    SELECT COUNT(*) FROM xom_retails_analytics.rpt_customer_performance WHERE has_purchased
+
+- id: top_customer_spend
+  question: What is the highest amount any single customer has spent?
+  check: scalar
+  reference_sql: SELECT MAX(revenue) FROM xom_retails_analytics.rpt_customer_performance
+
+- id: repeat_customers
+  question: How many customers ordered more than once?
+  check: scalar
+  reference_sql: >
+    SELECT COUNT(*) FROM xom_retails_analytics.rpt_customer_performance
+    WHERE is_repeat_customer
+
+- id: never_sold_products
+  question: How many products have never been sold?
+  check: scalar
+  reference_sql: >
+    SELECT COUNT(*) FROM xom_retails_analytics.rpt_product_performance WHERE NOT has_sold
+
+- id: avg_order_value
+  question: What is the average order value?
+  check: scalar
+  reference_sql: >
+    SELECT SUM(gross_sales) / COUNT(DISTINCT order_id) FROM xom_retails_gold.fact_sales
+
+- id: best_month
+  question: Which month had the highest revenue?
+  check: set
+  column: month_start
+  reference_sql: >
+    SELECT month_start FROM xom_retails_analytics.rpt_monthly_revenue
+    ORDER BY revenue DESC LIMIT 1
