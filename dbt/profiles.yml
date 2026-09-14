@@ -10,7 +10,10 @@ xom_retails:
     dev:
       type: duckdb
       # Local DuckDB file holding the SILVER + GOLD layers.
-      path: "{{ env_var('DUCKDB_PATH', 'C:/CS/Project/retail_sales/duckdb_warehouse/warehouse.duckdb') }}"
+      # The default is relative to this dbt project folder, which is where dbt
+      # always runs from - so a fresh clone works anywhere on disk with no edits.
+      # Set DUCKDB_PATH (absolute) only to put the warehouse somewhere else.
+      path: "{{ env_var('DUCKDB_PATH', '../duckdb_warehouse/warehouse.duckdb') }}"
       # Custom schemas are appended to this, giving xom_retails_silver / xom_retails_gold.
       schema: xom_retails
       threads: 4

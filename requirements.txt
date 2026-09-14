@@ -19,6 +19,10 @@ prefect>=3.8,<4
 google-genai>=1.0.0
 sqlglot>=25.0.0
 rich>=13.0.0
+# Imported directly by the eval harness and the API; both arrive transitively via
+# dbt and FastAPI, but a direct import deserves a direct pin.
+pyyaml>=6.0
+pydantic>=2.0
 
 # Serving layer - HTTP access to the text-to-SQL engine
 fastapi>=0.110

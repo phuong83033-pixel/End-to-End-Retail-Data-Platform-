@@ -8,9 +8,11 @@ claude_code_plan.md
 
 # dbt build artefacts - the project source itself is tracked
 dbt/target/
+!dbt/target/.gitkeep
 dbt/dbt_packages/
 dbt/logs/
 dbt/.user.yml
 
 # Local DuckDB warehouse file - rebuilt by `dbt build`
 duckdb_warehouse/
+!duckdb_warehouse/.gitkeep

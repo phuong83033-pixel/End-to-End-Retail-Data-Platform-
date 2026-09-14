@@ -1,0 +1,3 @@
+# Keeps this directory in git.
+# docker-compose bind-mounts dbt/target into the dbt-docs nginx container, which
+# fails to start if the path does not exist before the first `dbt docs generate`.

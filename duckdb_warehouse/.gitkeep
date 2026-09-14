@@ -1,0 +1,3 @@
+# Keeps this directory in git.
+# DuckDB will not create a missing parent directory, so without this a fresh
+# clone fails on the first `dbt build` with an opaque IO error.
